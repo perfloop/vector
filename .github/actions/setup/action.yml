@@ -11,6 +11,11 @@ inputs:
     default: true
     description: "Cache Cargo registry, index, and git DB. Enabled automatically if any Rust tools are requested."
 
+  cache-key-suffix:
+    required: false
+    default: ""
+    description: "Extra segment appended to the cache key. Set to matrix.target (or similar) for matrix jobs that share a GITHUB_JOB name but produce distinct build outputs."
+
   mold:
     required: false
     default: true
@@ -134,12 +139,15 @@ runs:
       run: echo "::add-matcher::.github/matchers/rust.json"
       shell: bash
 
-    # Caches ~/.cargo (registry + git) AND target/ build artifacts. Master
-    # pushes save the cache; PRs read but don't write. Cache key includes
-    # rustc + Cargo.lock hash (Swatinem default); PRs with an unchanged
-    # Cargo.lock get an exact hit, PRs that bump Cargo.lock fall back to
-    # Swatinem's restore-keys prefix match and reuse most of master's
-    # target/.
+    # Caches ~/.cargo (registry + git) AND target/ build artifacts. Cache
+    # key includes rustc + Cargo.lock hash (Swatinem default); PRs with an
+    # unchanged Cargo.lock get an exact hit, PRs that bump Cargo.lock fall
+    # back to Swatinem's restore-keys prefix match and reuse most of the
+    # cached target/.
+    #
+    # Saves only on master pushes and merge-queue runs (the commits that
+    # become master). PRs restore but don't write, keeping the cache
+    # aligned with the state PRs are diffed against.
     #
     # `cache-bin: false` because the setup action installs cargo bins
     # explicitly below; letting Swatinem manage ~/.cargo/bin risks removing
@@ -149,8 +157,9 @@ runs:
       uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       with:
         prefix-key: "v1-vector"
+        key: ${{ inputs.cache-key-suffix }}
         cache-bin: "false"
-        save-if: ${{ github.ref == 'refs/heads/master' }}
+        save-if: ${{ github.ref == 'refs/heads/master' || github.event_name == 'merge_group' }}
 
     - name: Install mold
       if: ${{ runner.os == 'Linux' && env.DISABLE_MOLD != 'true' && inputs.mold == 'true' }}

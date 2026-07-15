@@ -164,6 +164,7 @@ jobs:
           cargo-deb: true
           protoc: true
           libsasl2: true
+          cache-key-suffix: ${{ matrix.target }}
       - name: Install cross-compilation tools
         run: timeout 30m sudo apt-get install -y binutils-arm-linux-gnueabihf binutils-aarch64-linux-gnu cmark-gfm
       - name: Install rpm
