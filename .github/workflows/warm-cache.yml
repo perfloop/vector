@@ -1,0 +1,60 @@
+name: Warm Cache
+
+# Populates the shared Rust build cache under refs/heads/master so PR
+# runs of test.yml (check-clippy, unit tests, doc checks, etc.) can
+# restore it.
+#
+# The setup action gates cache saves on github.ref == 'refs/heads/master',
+# so any workflow running on master with `cargo build` will produce a
+# cache entry under the shared-key "workspace". This workflow is that
+# producer.
+#
+# Triggers:
+#   - schedule daily: covers the case where no Cargo.lock change lands
+#     for a while and we still want a fresh, well-fingerprinted cache.
+#   - push to master when Cargo.lock changes: rewarms immediately after
+#     dep bumps so the next PR sees an exact-key hit.
+#   - workflow_dispatch: manual trigger for on-demand warming.
+#
+# The seed command is `cargo build --workspace --tests` so cached
+# artifacts include .rlib (not just .rmeta) — required for consumers
+# like `cargo test` to link without recompiling deps.
+
+on:
+  schedule:
+    # 05:00 UTC daily. Off-peak for US working hours, ahead of EU standup.
+    - cron: "0 5 * * *"
+  push:
+    branches:
+      - master
+    paths:
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/config.toml"
+      - "**/Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # to save cache
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    name: Warm shared workspace cache
+    runs-on: ubuntu-24.04-8core
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+        with:
+          rust: true
+          protoc: true
+          libsasl2: true
+
+      - name: Seed build (produces .rlib for workspace + tests)
+        run: cargo build --workspace --tests --locked
