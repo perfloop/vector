@@ -139,27 +139,37 @@ runs:
       run: echo "::add-matcher::.github/matchers/rust.json"
       shell: bash
 
-    # Caches ~/.cargo (registry + git) AND target/ build artifacts. Cache
-    # key includes rustc + Cargo.lock hash (Swatinem default); PRs with an
-    # unchanged Cargo.lock get an exact hit, PRs that bump Cargo.lock fall
-    # back to Swatinem's restore-keys prefix match and reuse most of the
-    # cached target/.
+    # Caches ~/.cargo (registry + git) AND target/ build artifacts.
     #
-    # Saves only on master pushes and merge-queue runs (the commits that
-    # become master). PRs restore but don't write, keeping the cache
-    # aligned with the state PRs are diffed against.
+    # `shared-key: "workspace"` puts every job on one cache entry (per
+    # rustc + Cargo.lock combination). A single daily seed workflow
+    # populates that entry; PRs restore it and each job reuses the
+    # common target/deps regardless of which cargo subcommand it runs.
+    # `cache-key-suffix` (passed as Swatinem `key`) lets matrix jobs
+    # further differentiate — e.g. cross-target builds don't collide.
+    #
+    # Cache key includes rustc + Cargo.lock hash (Swatinem default).
+    # PRs whose Cargo.lock matches master get an exact hit; PRs that
+    # bump Cargo.lock fall back to Swatinem's restore-keys prefix
+    # match and reuse most of the cached target/.
+    #
+    # Saves only on master pushes. GitHub scopes caches by ref, and
+    # merge-queue refs (refs/heads/gh-readonly-queue/...) are isolated
+    # from master and from PRs — saving there would produce entries
+    # nothing else can read.
     #
     # `cache-bin: false` because the setup action installs cargo bins
-    # explicitly below; letting Swatinem manage ~/.cargo/bin risks removing
-    # tools on persistent self-hosted release builders.
+    # explicitly below; letting Swatinem manage ~/.cargo/bin risks
+    # removing tools on persistent self-hosted release builders.
     - name: Cache Cargo + target/
       if: ${{ inputs.cargo-cache == 'true' || env.NEEDS_RUST == 'true' }}
       uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       with:
         prefix-key: "v1-vector"
+        shared-key: "workspace"
         key: ${{ inputs.cache-key-suffix }}
         cache-bin: "false"
-        save-if: ${{ github.ref == 'refs/heads/master' || github.event_name == 'merge_group' }}
+        save-if: ${{ github.ref == 'refs/heads/master' }}
 
     - name: Install mold
       if: ${{ runner.os == 'Linux' && env.DISABLE_MOLD != 'true' && inputs.mold == 'true' }}
