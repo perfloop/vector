@@ -2,6 +2,7 @@ use std::fs;
 use std::process::Command;
 
 use anyhow::{Result, bail};
+use indoc::formatdoc;
 
 use crate::utils::paths;
 
@@ -43,21 +44,39 @@ impl Cli {
 
 fn render_template(fragment_type: &str, author: &str) -> String {
     match fragment_type {
-        "breaking" => format!(
-            "---\n\
-             title: \"TODO one-line title\"\n\
-             migration: |\n  \
-             TODO how to migrate. Use \"N/A\" if there is nothing to do.\n\
-             ---\n\
-             TODO one-paragraph summary that lands in the changelog list.\n\
-             \n\
-             authors: {author}\n"
-        ),
-        _ => format!(
-            "TODO one-item description of the change.\n\
-             \n\
-             authors: {author}\n"
-        ),
+        "breaking" => formatdoc! {r#"
+            ---
+            title: "TODO one-line title"
+            migration: |
+              TODO how to migrate. Use "N/A" for informational-only breakers.
+
+              For config changes, show a before/after with fenced code blocks, e.g.:
+
+              ##### Old
+
+              ```yaml
+              sinks:
+                my_sink:
+                  option: old_value
+              ```
+
+              ##### New
+
+              ```yaml
+              sinks:
+                my_sink:
+                  option: new_value
+              ```
+            ---
+            TODO one-paragraph summary that lands in the changelog list.
+
+            authors: {author}
+        "#},
+        _ => formatdoc! {"
+            TODO one-item description of the change.
+
+            authors: {author}
+        "},
     }
 }
 
