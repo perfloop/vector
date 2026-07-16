@@ -61,9 +61,14 @@ as a heading in the main changelog and not the list. Instead, separate content w
 
 ### Breaking changes
 
-When using the type 'breaking' to add notes for a breaking change, these should be more verbose than
-other entries typically. It should include all details that would be relevant for the user to need
-to handle upgrading to the breaking change.
+Breaking fragments (`*.breaking.md`) carry extra structured fields so the release process can
+auto-generate the upgrade guide from them.
+
+Scaffold one with:
+
+    cargo vdev changelog new breaking <slug>
+
+Then fill in the placeholders. `make check-changelog-fragments` validates the schema.
 
 ## Community Contributors
 
@@ -78,12 +83,15 @@ The process for adding this is simply to have the last line of the file be in th
 
 Do not include a leading `@` when specifying your username.
 
-## Example
+## Example (non-breaking)
 
-Here is an example of a changelog fragment that adds a breaking change explanation.
+Here is an example of a non-breaking changelog fragment (see the [Breaking changes](#breaking-changes)
+section above for the `breaking` format).
 
-    $ cat changelog.d/42_very_good_words.breaking.md
+    $ cat changelog.d/42_very_good_words.enhancement.md
     This change is so great. It's such a great change that this sentence
     explaining the change has to span multiple lines of text.
 
-    It even necessitates a line break. It is a breaking change after all.
+    It even necessitates a line break.
+
+    authors: some_contributor
