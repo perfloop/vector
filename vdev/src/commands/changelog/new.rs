@@ -47,6 +47,7 @@ fn render_template(fragment_type: &str, author: &str) -> String {
         "breaking" => formatdoc! {r#"
             ---
             title: "TODO one-line title"
+            summary: "TODO one-line summary that lands in the changelog list."
             migration: |
               TODO how to migrate. Use "N/A" for informational-only breakers.
 
@@ -68,8 +69,6 @@ fn render_template(fragment_type: &str, author: &str) -> String {
                   option: new_value
               ```
             ---
-            TODO one-paragraph summary that lands in the changelog list.
-
             authors: {author}
         "#},
         _ => formatdoc! {"

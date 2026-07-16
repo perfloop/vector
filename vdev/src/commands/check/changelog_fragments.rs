@@ -156,17 +156,18 @@ fn validate_contents(path: &std::path::Path, filename: &str, fragment_type: &str
 /// ---
 /// <yaml frontmatter>
 /// ---
-/// <markdown body — one-item summary for the changelog>
-///
 /// authors: <name> [<name> ...]
 /// ```
 ///
-/// Frontmatter fields feed the release-time upgrade guide generator; keep them in sync
-/// with the `changelog.d/README.md` "Breaking changes" section.
+/// All prose lives in the frontmatter. The release generator uses `summary` for the
+/// changelog list item and `title` + `migration` for the upgrade-guide section. Keep
+/// this in sync with `changelog.d/README.md`.
 #[derive(Deserialize, Debug)]
 struct BreakingFrontmatter {
     /// Section heading in the generated upgrade guide.
     title: String,
+    /// One-line summary that lands in the release changelog list.
+    summary: String,
     /// Stable anchor slug. Optional — the generator derives one from `title` when omitted.
     #[serde(default)]
     anchor: Option<String>,
@@ -192,6 +193,9 @@ fn validate_breaking_fragment(content: &str, filename: &str) -> Result<()> {
     if fm.title.trim().is_empty() {
         bail!("invalid breaking fragment '{filename}': `title` must not be empty.");
     }
+    if fm.summary.trim().is_empty() {
+        bail!("invalid breaking fragment '{filename}': `summary` must not be empty.");
+    }
     if fm.migration.trim().is_empty() {
         bail!(
             "invalid breaking fragment '{filename}': `migration` must not be empty (use \"N/A\" for informational breakers)."
@@ -205,15 +209,15 @@ fn validate_breaking_fragment(content: &str, filename: &str) -> Result<()> {
         );
     }
 
-    // Body between frontmatter and the trailing `authors:` line must be non-empty markdown.
-    let body_without_authors: Vec<&str> = body
+    // Nothing but the trailing `authors:` line is allowed between the frontmatter and EOF.
+    let stray: Vec<&str> = body
         .lines()
         .take_while(|l| !l.starts_with("authors: "))
+        .filter(|l| !l.trim().is_empty())
         .collect();
-    let body_text = body_without_authors.join("\n");
-    if body_text.trim().is_empty() {
+    if !stray.is_empty() {
         bail!(
-            "invalid breaking fragment '{filename}': body between frontmatter and the `authors:` line must not be empty."
+            "invalid breaking fragment '{filename}': body between frontmatter and `authors:` must be empty; put prose in the `summary`/`migration` fields instead."
         );
     }
 
@@ -240,8 +244,8 @@ mod tests {
     #[test]
     fn valid_breaking_fragment() {
         let raw = wrap(
-            "title: \"Env var interpolation disabled\"\nanchor: env-var\nmigration: |\n  Pass the flag.",
-            "Env var interpolation is off by default.",
+            "title: \"Env var interpolation disabled\"\nsummary: \"Off by default now.\"\nanchor: env-var\nmigration: |\n  Pass the flag.",
+            "",
         );
         validate_breaking_fragment(&raw, "x.breaking.md").unwrap();
     }
@@ -249,8 +253,8 @@ mod tests {
     #[test]
     fn valid_without_anchor() {
         let raw = wrap(
-            "title: \"A change\"\nmigration: \"N/A\"",
-            "Informational only.",
+            "title: \"A change\"\nsummary: \"Change happened.\"\nmigration: \"N/A\"",
+            "",
         );
         validate_breaking_fragment(&raw, "x.breaking.md").unwrap();
     }
@@ -264,14 +268,14 @@ mod tests {
 
     #[test]
     fn missing_closing_delimiter() {
-        let raw = "---\ntitle: x\nmigration: y\n\nbody\n\nauthors: pront\n";
+        let raw = "---\ntitle: x\nsummary: y\nmigration: z\n\nauthors: pront\n";
         let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("closing '---'"), "{err}");
     }
 
     #[test]
     fn empty_title() {
-        let raw = wrap("title: \"\"\nmigration: \"N/A\"", "body");
+        let raw = wrap("title: \"\"\nsummary: \"x\"\nmigration: \"N/A\"", "");
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(
             err.to_string().contains("`title` must not be empty"),
@@ -280,8 +284,18 @@ mod tests {
     }
 
     #[test]
+    fn empty_summary() {
+        let raw = wrap("title: \"x\"\nsummary: \"\"\nmigration: \"N/A\"", "");
+        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        assert!(
+            err.to_string().contains("`summary` must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn missing_migration() {
-        let raw = wrap("title: \"x\"", "body");
+        let raw = wrap("title: \"x\"\nsummary: \"y\"", "");
         let err = format!(
             "{:#}",
             validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err()
@@ -290,8 +304,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_body() {
-        let raw = wrap("title: \"x\"\nmigration: \"N/A\"", "");
+    fn stray_body_rejected() {
+        let raw = wrap(
+            "title: \"x\"\nsummary: \"y\"\nmigration: \"N/A\"",
+            "leftover prose",
+        );
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(
             err.to_string().contains("body between frontmatter"),
@@ -302,8 +319,8 @@ mod tests {
     #[test]
     fn bad_anchor() {
         let raw = wrap(
-            "title: \"x\"\nanchor: \"Not Valid!\"\nmigration: \"N/A\"",
-            "body",
+            "title: \"x\"\nsummary: \"y\"\nanchor: \"Not Valid!\"\nmigration: \"N/A\"",
+            "",
         );
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("kebab-case slug"), "{err}");
