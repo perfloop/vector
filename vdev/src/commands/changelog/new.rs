@@ -47,28 +47,34 @@ fn render_template(fragment_type: &str, author: &str) -> String {
         "breaking" => formatdoc! {r#"
             ---
             title: "TODO one-line title"
-            summary: "TODO one-line summary that lands in the changelog list."
-            migration: |
-              TODO how to migrate. Use "N/A" for informational-only breakers.
-
-              For config changes, show a before/after with fenced code blocks, e.g.:
-
-              ##### Old
-
-              ```yaml
-              sinks:
-                my_sink:
-                  option: old_value
-              ```
-
-              ##### New
-
-              ```yaml
-              sinks:
-                my_sink:
-                  option: new_value
-              ```
             ---
+
+            ## Summary
+
+            TODO one-paragraph summary that lands in the release changelog list.
+
+            ## Migration
+
+            TODO how to migrate. Use `N/A` for informational-only breakers.
+
+            For config changes, show a before/after with fenced code blocks:
+
+            ##### Old
+
+            ```yaml
+            sinks:
+              my_sink:
+                option: old_value
+            ```
+
+            ##### New
+
+            ```yaml
+            sinks:
+              my_sink:
+                option: new_value
+            ```
+
             authors: {author}
         "#},
         _ => formatdoc! {"
