@@ -59,7 +59,7 @@ fn render_template(fragment_type: &str, author: &str) -> String {
 
             For config changes, show a before/after with fenced code blocks:
 
-            ##### Old
+            ### Old
 
             ```yaml
             sinks:
@@ -67,7 +67,7 @@ fn render_template(fragment_type: &str, author: &str) -> String {
                 option: old_value
             ```
 
-            ##### New
+            ### New
 
             ```yaml
             sinks:
