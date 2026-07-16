@@ -268,7 +268,7 @@ fn validate_breaking_fragment(content: &str, filename: &str) -> Result<()> {
 }
 
 /// Match a header only when it starts at column 0 AND is not inside a fenced code block.
-/// Treats any line starting with ``` (three backticks) as a fence toggle.
+/// Treats any line starting with three backticks as a fence toggle.
 fn find_header(body: &str, header: &str) -> Option<usize> {
     let mut offset = 0;
     let mut in_fence = false;

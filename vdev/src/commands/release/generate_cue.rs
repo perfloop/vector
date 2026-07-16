@@ -16,6 +16,7 @@ use crate::utils::{git, paths};
 
 const RELEASES_DIR: &str = "website/cue/reference/releases";
 const CHANGELOG_DIR: &str = "changelog.d";
+const HIGHLIGHTS_DIR: &str = "website/content/en/highlights";
 
 /// Allowed conventional-commit types.
 const ALLOWED_TYPES: &[&str] = &[
@@ -81,6 +82,28 @@ pub(super) fn run(new_version: &Version) -> Result<PathBuf> {
     let cue_text = render_release_cue(&new_version, &changelog_entries, &commits);
     fs::write(&cue_path, cue_text)
         .with_context(|| format!("Failed to write {}", cue_path.display()))?;
+
+    // If there are any breaking changes, emit the upgrade-guide highlights markdown.
+    let breaking: Vec<&BreakingDetails> = changelog_entries
+        .iter()
+        .filter_map(|e| e.breaking_details.as_ref())
+        .collect();
+    if !breaking.is_empty() {
+        let authors: Vec<String> = collect_release_authors(&changelog_entries);
+        let highlights_path = repo_root
+            .join(HIGHLIGHTS_DIR)
+            .join(upgrade_guide_filename(&new_version));
+        if highlights_path.exists() {
+            bail!(
+                "{} already exists. Delete it (or move it aside) and re-run.",
+                highlights_path.display()
+            );
+        }
+        let md = render_upgrade_guide(&new_version, &authors, &breaking);
+        fs::write(&highlights_path, md)
+            .with_context(|| format!("Failed to write {}", highlights_path.display()))?;
+        success!("Wrote {}", highlights_path.display());
+    }
 
     // Retire the changelog fragments via `git rm` (preserves README.md).
     retire_changelog_fragments(&changelog_dir)?;
@@ -375,6 +398,16 @@ struct ChangelogEntry {
     breaking: bool,
     description: String,
     contributors: Vec<String>,
+    /// For `*.breaking.md` fragments, the structured upgrade-guide details.
+    breaking_details: Option<BreakingDetails>,
+}
+
+#[derive(Debug, Clone)]
+struct BreakingDetails {
+    title: String,
+    anchor: String,
+    /// Rendered markdown for the `## Migration` section (headers, code fences, etc.).
+    migration: String,
 }
 
 fn read_changelog_fragments(dir: &Path) -> Result<Vec<ChangelogEntry>> {
@@ -425,6 +458,31 @@ fn parse_changelog_fragment(path: &Path) -> Result<ChangelogEntry> {
     let raw =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
 
+    // Strip the `authors:` trailer first — used by every fragment type.
+    let (body, contributors) = split_authors(&raw);
+
+    if breaking {
+        let (summary, details) = parse_breaking_body(body)
+            .with_context(|| format!("Failed to parse breaking fragment {}", path.display()))?;
+        return Ok(ChangelogEntry {
+            cue_type: cue_type.to_string(),
+            breaking,
+            description: summary,
+            contributors,
+            breaking_details: Some(details),
+        });
+    }
+
+    Ok(ChangelogEntry {
+        cue_type: cue_type.to_string(),
+        breaking,
+        description: body.trim().to_string(),
+        contributors,
+        breaking_details: None,
+    })
+}
+
+fn split_authors(raw: &str) -> (&str, Vec<String>) {
     let mut lines: Vec<&str> = raw.lines().collect();
     let mut contributors: Vec<String> = Vec::new();
     if let Some(last) = lines.last()
@@ -433,14 +491,88 @@ fn parse_changelog_fragment(path: &Path) -> Result<ChangelogEntry> {
         contributors = rest.split_whitespace().map(String::from).collect();
         lines.pop();
     }
-    let description = lines.join("\n").trim().to_string();
+    // Slice back into `raw` up to the end of the last remaining line so callers
+    // still see an &str; keeps the parser zero-copy for the body.
+    let joined_len: usize = lines
+        .iter()
+        .map(|l| l.len() + 1) // +1 for the '\n' each line was split on
+        .sum();
+    let end = joined_len.min(raw.len());
+    (raw.get(..end).unwrap_or(raw), contributors)
+}
 
-    Ok(ChangelogEntry {
-        cue_type: cue_type.to_string(),
-        breaking,
-        description,
-        contributors,
-    })
+#[derive(serde::Deserialize)]
+struct BreakingFm {
+    title: String,
+    #[serde(default)]
+    anchor: Option<String>,
+}
+
+const SUMMARY_HDR: &str = "## Summary\n";
+const MIGRATION_HDR: &str = "## Migration\n";
+
+/// Parse the body of a `*.breaking.md` fragment (frontmatter + `## Summary` + `## Migration`).
+/// Returns `(summary_markdown, breaking_details)`. Assumes the input has already been
+/// validated by `vdev check changelog-fragments` — this parser is best-effort and returns
+/// clear errors if the format is off.
+fn parse_breaking_body(body: &str) -> Result<(String, BreakingDetails)> {
+    let rest = body
+        .strip_prefix("---\n")
+        .ok_or_else(|| anyhow!("missing YAML frontmatter"))?;
+    let (frontmatter_yaml, sections) = rest
+        .split_once("\n---\n")
+        .ok_or_else(|| anyhow!("missing closing '---' for frontmatter"))?;
+
+    let fm: BreakingFm = serde_yaml::from_str(frontmatter_yaml).context("frontmatter YAML")?;
+    let s_pos = sections
+        .find(SUMMARY_HDR)
+        .ok_or_else(|| anyhow!("missing `## Summary` section"))?;
+    let m_pos = sections
+        .find(MIGRATION_HDR)
+        .ok_or_else(|| anyhow!("missing `## Migration` section"))?;
+    if m_pos < s_pos {
+        bail!("`## Summary` must come before `## Migration`");
+    }
+
+    let summary = sections
+        .get(s_pos + SUMMARY_HDR.len()..m_pos)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let migration = sections
+        .get(m_pos + MIGRATION_HDR.len()..)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let anchor = fm.anchor.unwrap_or_else(|| slugify(&fm.title));
+
+    Ok((
+        summary,
+        BreakingDetails {
+            title: fm.title,
+            anchor,
+            migration,
+        },
+    ))
+}
+
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_dash = true; // suppress leading dash
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 fn retire_changelog_fragments(dir: &Path) -> Result<()> {
@@ -526,6 +658,69 @@ fn run_cue_fmt(path: &Path) -> Result<()> {
         bail!("cue fmt exited with {status}");
     }
     Ok(())
+}
+
+// ---------- Upgrade-guide (highlights) rendering ----------
+
+fn upgrade_guide_filename(version: &Version) -> String {
+    let date = Utc::now().format("%Y-%m-%d");
+    let version_slug = format!("{}-{}-{}", version.major, version.minor, version.patch);
+    format!("{date}-{version_slug}-upgrade-guide.md")
+}
+
+fn collect_release_authors(entries: &[ChangelogEntry]) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let set: BTreeSet<String> = entries
+        .iter()
+        .filter(|e| e.breaking)
+        .flat_map(|e| e.contributors.iter().cloned())
+        .collect();
+    set.into_iter().collect()
+}
+
+fn render_upgrade_guide(
+    version: &Version,
+    authors: &[String],
+    breaking: &[&BreakingDetails],
+) -> String {
+    let date = Utc::now().format("%Y-%m-%d").to_string();
+    let title = format!("{}.{} Upgrade Guide", version.major, version.minor);
+    let description = format!("An upgrade guide that addresses breaking changes in {version}");
+
+    let mut authors_yaml = String::from("[");
+    for (i, a) in authors.iter().enumerate() {
+        if i > 0 {
+            authors_yaml.push_str(", ");
+        }
+        authors_yaml.push('"');
+        authors_yaml.push_str(a);
+        authors_yaml.push('"');
+    }
+    authors_yaml.push(']');
+
+    let mut out = String::new();
+    out.push_str("---\n");
+    writeln!(out, "date: \"{date}\"").unwrap();
+    writeln!(out, "title: \"{title}\"").unwrap();
+    writeln!(out, "description: \"{description}\"").unwrap();
+    writeln!(out, "authors: {authors_yaml}").unwrap();
+    writeln!(out, "release: \"{version}\"").unwrap();
+    out.push_str("hide_on_release_notes: false\n");
+    out.push_str("badges:\n  type: breaking change\n");
+    out.push_str("---\n\n");
+
+    out.push_str("## Vector breaking changes\n\n");
+    for (i, b) in breaking.iter().enumerate() {
+        writeln!(out, "{}. [{}](#{})", i + 1, b.title, b.anchor).unwrap();
+    }
+    out.push_str("\n## Vector upgrade guide\n\n");
+    for b in breaking {
+        writeln!(out, "### {} {{#{}}}\n", b.title, b.anchor).unwrap();
+        out.push_str(b.migration.trim());
+        out.push_str("\n\n");
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -626,7 +821,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.join("legacy_break.breaking.md"),
-            "Removed legacy thing.\n",
+            "---\ntitle: \"Legacy thing removed\"\n---\n\n## Summary\n\nRemoved legacy thing.\n\n## Migration\n\nN/A\n\nauthors: dave\n",
         )
         .unwrap();
         fs::write(dir.join("sec.security.md"), "Patched a CVE.\n").unwrap();
@@ -646,10 +841,17 @@ mod tests {
         assert!(feat.description.starts_with("Adds a thing."));
         assert!(!feat.description.contains("authors:"));
 
-        // No-author entries get empty contributor list.
-        assert!(entries[1].contributors.is_empty());
-        // Breaking fragments must be marked as such.
-        assert!(entries[1].breaking);
+        // Breaking fragments must be marked as such and carry structured details.
+        let breaking = &entries[1];
+        assert!(breaking.breaking);
+        assert!(breaking.breaking_details.is_some());
+        let details = breaking.breaking_details.as_ref().unwrap();
+        assert_eq!(details.title, "Legacy thing removed");
+        assert_eq!(details.anchor, "legacy-thing-removed");
+        assert_eq!(details.migration.trim(), "N/A");
+        // Breaking description in the CUE is the Summary, not the whole body.
+        assert_eq!(breaking.description, "Removed legacy thing.");
+        assert_eq!(breaking.contributors, vec!["dave".to_string()]);
         assert!(!entries[0].breaking);
     }
 
@@ -668,12 +870,14 @@ mod tests {
                 breaking: false,
                 description: "Adds a thing.\nMulti-line.".into(),
                 contributors: vec!["alice".into()],
+                breaking_details: None,
             },
             ChangelogEntry {
                 cue_type: "fix".into(),
                 breaking: false,
                 description: "Fixed it.".into(),
                 contributors: vec![],
+                breaking_details: None,
             },
         ];
         let commits = vec![Commit {
@@ -800,5 +1004,61 @@ releases: "0.55.0": {
         let ids = collect_released_identifiers(Path::new("/nonexistent")).unwrap();
         assert!(ids.shas.is_empty());
         assert!(ids.pr_numbers.is_empty());
+    }
+
+    #[test]
+    fn parse_breaking_body_extracts_summary_and_migration() {
+        let body = "---\ntitle: \"Env var interpolation off\"\nanchor: env-var\n---\n\n## Summary\n\nOff by default now.\n\n## Migration\n\nPass the flag.\n\n```bash\nvector --config vector.yaml\n```\n";
+        let (summary, details) = parse_breaking_body(body).unwrap();
+        assert_eq!(summary, "Off by default now.");
+        assert_eq!(details.title, "Env var interpolation off");
+        assert_eq!(details.anchor, "env-var");
+        assert!(details.migration.starts_with("Pass the flag."));
+        assert!(details.migration.contains("```bash"));
+    }
+
+    #[test]
+    fn parse_breaking_body_derives_anchor_from_title() {
+        let body = "---\ntitle: \"A Big Change!\"\n---\n\n## Summary\n\nx\n\n## Migration\n\nN/A\n";
+        let (_, details) = parse_breaking_body(body).unwrap();
+        assert_eq!(details.anchor, "a-big-change");
+    }
+
+    #[test]
+    fn slugify_examples() {
+        assert_eq!(slugify("A Big Change!"), "a-big-change");
+        assert_eq!(slugify("  --Foo/Bar--  "), "foo-bar");
+        assert_eq!(slugify("already-good"), "already-good");
+        assert_eq!(slugify("Numbers 123 OK"), "numbers-123-ok");
+    }
+
+    #[test]
+    fn upgrade_guide_filename_uses_version() {
+        let name = upgrade_guide_filename(&Version::parse("0.58.0").unwrap());
+        assert!(name.ends_with("-0-58-0-upgrade-guide.md"), "{name}");
+    }
+
+    #[test]
+    fn render_upgrade_guide_shape() {
+        let version = Version::parse("0.58.0").unwrap();
+        let d1 = BreakingDetails {
+            title: "First change".into(),
+            anchor: "first".into(),
+            migration: "Do X.".into(),
+        };
+        let d2 = BreakingDetails {
+            title: "Second change".into(),
+            anchor: "second".into(),
+            migration: "Do Y.".into(),
+        };
+        let md = render_upgrade_guide(&version, &["alice".into(), "bob".into()], &[&d1, &d2]);
+        assert!(md.contains("title: \"0.58 Upgrade Guide\""));
+        assert!(md.contains("release: \"0.58.0\""));
+        assert!(md.contains("authors: [\"alice\", \"bob\"]"));
+        assert!(md.contains("1. [First change](#first)"));
+        assert!(md.contains("2. [Second change](#second)"));
+        assert!(md.contains("### First change {#first}"));
+        assert!(md.contains("Do X."));
+        assert!(md.contains("### Second change {#second}"));
     }
 }
