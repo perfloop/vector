@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::commands::changelog::new::TODO_HANDLE;
 use crate::utils::{git, paths};
 
 const CHANGELOG_DIR: &str = "changelog.d";
@@ -140,6 +141,11 @@ fn validate_contents(path: &std::path::Path, filename: &str, fragment_type: &str
             "invalid fragment contents for '{filename}': authors should be space delimited, not comma delimited."
         );
     }
+    if names.split_whitespace().any(|n| n == TODO_HANDLE) {
+        bail!(
+            "invalid fragment contents for '{filename}': the scaffolder placeholder '{TODO_HANDLE}' must be replaced with a real GitHub handle."
+        );
+    }
 
     if fragment_type == "breaking" {
         validate_breaking_fragment(&content, filename)?;
@@ -202,6 +208,11 @@ fn validate_breaking_fragment(content: &str, filename: &str) -> Result<()> {
     if fm.title.trim().is_empty() {
         bail!("invalid breaking fragment '{filename}': `title` must not be empty.");
     }
+    if fm.title.contains("TODO") {
+        bail!(
+            "invalid breaking fragment '{filename}': `title` still contains the scaffolder placeholder 'TODO'."
+        );
+    }
     if let Some(anchor) = &fm.anchor
         && !is_valid_anchor(anchor)
     {
@@ -256,13 +267,16 @@ fn validate_breaking_fragment(content: &str, filename: &str) -> Result<()> {
     Ok(())
 }
 
-/// Match a header only when it starts at column 0 (avoids matching `## Summary` inside a
-/// code fence, quoted line, or elsewhere).
+/// Match a header only when it starts at column 0 AND is not inside a fenced code block.
+/// Treats any line starting with ``` (three backticks) as a fence toggle.
 fn find_header(body: &str, header: &str) -> Option<usize> {
     let mut offset = 0;
+    let mut in_fence = false;
     for line in body.split_inclusive('\n') {
         let trimmed_end = line.trim_end_matches('\n');
-        if trimmed_end == header {
+        if trimmed_end.starts_with("```") {
+            in_fence = !in_fence;
+        } else if !in_fence && trimmed_end == header {
             return Some(offset);
         }
         offset += line.len();
@@ -379,5 +393,23 @@ mod tests {
         let raw = wrap("title: \"x\"\nanchor: \"Not Valid!\"", &body("y", "N/A"));
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("kebab-case slug"), "{err}");
+    }
+
+    #[test]
+    fn todo_title_rejected() {
+        let raw = wrap("title: \"TODO one-line title\"", &body("y", "N/A"));
+        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        assert!(err.to_string().contains("placeholder 'TODO'"), "{err}");
+    }
+
+    #[test]
+    fn headers_inside_code_fence_are_ignored() {
+        // `## Summary` / `## Migration` only appear inside a fenced code block.
+        let raw = wrap(
+            "title: \"x\"",
+            "\n```\n## Summary\nfake\n\n## Migration\nfake\n```\n",
+        );
+        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        assert!(err.to_string().contains("missing `## Summary`"), "{err}");
     }
 }

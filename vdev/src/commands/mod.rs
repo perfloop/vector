@@ -68,7 +68,7 @@ pub struct Cli {
 }
 
 mod build;
-mod changelog;
+pub(crate) mod changelog;
 mod check;
 mod complete;
 mod crate_versions;

@@ -9,6 +9,10 @@ use crate::utils::paths;
 const CHANGELOG_DIR: &str = "changelog.d";
 const FRAGMENT_TYPES: &[&str] = &["breaking", "security", "feature", "enhancement", "fix"];
 
+/// Placeholder written for the author line when no handle can be detected.
+/// The checker rejects fragments still containing this sentinel.
+pub(crate) const TODO_HANDLE: &str = "TODO_your_gh_handle";
+
 /// Scaffold a new changelog fragment.
 #[derive(clap::Args, Debug)]
 #[command()]
@@ -22,6 +26,8 @@ pub struct Cli {
 
 impl Cli {
     pub fn exec(self) -> Result<()> {
+        validate_slug(&self.slug)?;
+
         let repo_root = paths::find_repo_root()?;
         let dir = repo_root.join(CHANGELOG_DIR);
         if !dir.is_dir() {
@@ -32,7 +38,7 @@ impl Cli {
             bail!("{} already exists", file.display());
         }
 
-        let author = detect_gh_handle().unwrap_or_else(|| "TODO_your_gh_handle".to_string());
+        let author = detect_gh_handle().unwrap_or_else(|| TODO_HANDLE.to_string());
         let content = render_template(&self.fragment_type, &author);
         fs::write(&file, content)?;
 
@@ -40,6 +46,23 @@ impl Cli {
         info!("Edit the file, then run `make check-changelog-fragments` to validate.");
         Ok(())
     }
+}
+
+/// A slug must be one filename component: ASCII alnum, `_`, or `-` only.
+/// Rejects path separators, `..`, absolute paths, and anything with punctuation.
+fn validate_slug(slug: &str) -> Result<()> {
+    if slug.is_empty() {
+        bail!("slug must not be empty");
+    }
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        bail!(
+            "invalid slug '{slug}': only ASCII letters, digits, '_', and '-' are allowed (got a path separator or punctuation?)"
+        );
+    }
+    Ok(())
 }
 
 fn render_template(fragment_type: &str, author: &str) -> String {
@@ -136,4 +159,30 @@ fn handle_from_noreply(email: &str) -> Option<String> {
 
 fn relative<'a>(base: &std::path::Path, path: &'a std::path::Path) -> &'a std::path::Path {
     path.strip_prefix(base).unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_normal_slugs() {
+        validate_slug("env_var_interpolation").unwrap();
+        validate_slug("12345_kafka_ack").unwrap();
+        validate_slug("Foo-Bar-1").unwrap();
+    }
+
+    #[test]
+    fn rejects_traversal() {
+        assert!(validate_slug("../outside").is_err());
+        assert!(validate_slug("foo/bar").is_err());
+        assert!(validate_slug("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_and_punctuation() {
+        assert!(validate_slug("").is_err());
+        assert!(validate_slug("foo.bar").is_err());
+        assert!(validate_slug("foo bar").is_err());
+    }
 }

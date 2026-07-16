@@ -1,4 +1,4 @@
-mod new;
+pub(crate) mod new;
 
 crate::cli_subcommands! {
     "Scaffold and inspect changelog fragments..."
