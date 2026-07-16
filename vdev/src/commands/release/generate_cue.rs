@@ -816,12 +816,32 @@ mod tests {
         fs::write(dir.join("README.md"), "ignored").unwrap();
         fs::write(
             dir.join("123_my_change.feature.md"),
-            "Adds a thing.\n\nIssue: https://example/123\n\nauthors: alice bob\n",
+            indoc::indoc! {"
+                Adds a thing.
+
+                Issue: https://example/123
+
+                authors: alice bob
+            "},
         )
         .unwrap();
         fs::write(
             dir.join("legacy_break.breaking.md"),
-            "---\ntitle: \"Legacy thing removed\"\n---\n\n## Summary\n\nRemoved legacy thing.\n\n## Migration\n\nN/A\n\nauthors: dave\n",
+            indoc::indoc! {r#"
+                ---
+                title: "Legacy thing removed"
+                ---
+
+                ## Summary
+
+                Removed legacy thing.
+
+                ## Migration
+
+                N/A
+
+                authors: dave
+            "#},
         )
         .unwrap();
         fs::write(dir.join("sec.security.md"), "Patched a CVE.\n").unwrap();
@@ -1008,7 +1028,24 @@ releases: "0.55.0": {
 
     #[test]
     fn parse_breaking_body_extracts_summary_and_migration() {
-        let body = "---\ntitle: \"Env var interpolation off\"\nanchor: env-var\n---\n\n## Summary\n\nOff by default now.\n\n## Migration\n\nPass the flag.\n\n```bash\nvector --config vector.yaml\n```\n";
+        let body = indoc::indoc! {r#"
+            ---
+            title: "Env var interpolation off"
+            anchor: env-var
+            ---
+
+            ## Summary
+
+            Off by default now.
+
+            ## Migration
+
+            Pass the flag.
+
+            ```bash
+            vector --config vector.yaml
+            ```
+        "#};
         let (summary, details) = parse_breaking_body(body).unwrap();
         assert_eq!(summary, "Off by default now.");
         assert_eq!(details.title, "Env var interpolation off");
@@ -1019,7 +1056,19 @@ releases: "0.55.0": {
 
     #[test]
     fn parse_breaking_body_derives_anchor_from_title() {
-        let body = "---\ntitle: \"A Big Change!\"\n---\n\n## Summary\n\nx\n\n## Migration\n\nN/A\n";
+        let body = indoc::indoc! {r#"
+            ---
+            title: "A Big Change!"
+            ---
+
+            ## Summary
+
+            x
+
+            ## Migration
+
+            N/A
+        "#};
         let (_, details) = parse_breaking_body(body).unwrap();
         assert_eq!(details.anchor, "a-big-change");
     }

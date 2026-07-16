@@ -296,47 +296,77 @@ fn is_valid_anchor(anchor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::{formatdoc, indoc};
 
-    fn wrap(frontmatter: &str, body: &str) -> String {
-        format!("---\n{frontmatter}\n---\n{body}\n\nauthors: pront\n")
-    }
+    /// Build a full breaking-fragment file body from the given frontmatter and section content.
+    fn wrap(frontmatter: &str, summary: &str, migration: &str) -> String {
+        formatdoc! {"
+            ---
+            {frontmatter}
+            ---
 
-    fn body(summary: &str, migration: &str) -> String {
-        format!("\n## Summary\n\n{summary}\n\n## Migration\n\n{migration}\n")
+            ## Summary
+
+            {summary}
+
+            ## Migration
+
+            {migration}
+
+            authors: pront
+        "}
     }
 
     #[test]
     fn valid_breaking_fragment() {
         let raw = wrap(
-            "title: \"Env var interpolation disabled\"\nanchor: env-var",
-            &body("Off by default now.", "Pass the flag."),
+            indoc! {r#"
+                title: "Env var interpolation disabled"
+                anchor: env-var
+            "#}
+            .trim(),
+            "Off by default now.",
+            "Pass the flag.",
         );
         validate_breaking_fragment(&raw, "x.breaking.md").unwrap();
     }
 
     #[test]
     fn valid_without_anchor() {
-        let raw = wrap("title: \"A change\"", &body("Change happened.", "N/A"));
+        let raw = wrap(r#"title: "A change""#, "Change happened.", "N/A");
         validate_breaking_fragment(&raw, "x.breaking.md").unwrap();
     }
 
     #[test]
     fn missing_frontmatter() {
-        let raw = "no frontmatter here\n\nauthors: pront\n";
+        let raw = indoc! {"
+            no frontmatter here
+
+            authors: pront
+        "};
         let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("YAML frontmatter"), "{err}");
     }
 
     #[test]
     fn missing_closing_delimiter() {
-        let raw = "---\ntitle: x\n\n## Summary\n\nhi\n\nauthors: pront\n";
+        let raw = indoc! {"
+            ---
+            title: x
+
+            ## Summary
+
+            hi
+
+            authors: pront
+        "};
         let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("closing '---'"), "{err}");
     }
 
     #[test]
     fn empty_title() {
-        let raw = wrap("title: \"\"", &body("x", "N/A"));
+        let raw = wrap(r#"title: """#, "x", "N/A");
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(
             err.to_string().contains("`title` must not be empty"),
@@ -346,21 +376,42 @@ mod tests {
 
     #[test]
     fn missing_summary_header() {
-        let raw = wrap("title: \"x\"", "\n## Migration\n\nN/A\n");
-        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        // Handwritten fragment with only ## Migration.
+        let raw = indoc! {r#"
+            ---
+            title: "x"
+            ---
+
+            ## Migration
+
+            N/A
+
+            authors: pront
+        "#};
+        let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("missing `## Summary`"), "{err}");
     }
 
     #[test]
     fn missing_migration_header() {
-        let raw = wrap("title: \"x\"", "\n## Summary\n\ny\n");
-        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        let raw = indoc! {r#"
+            ---
+            title: "x"
+            ---
+
+            ## Summary
+
+            y
+
+            authors: pront
+        "#};
+        let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("missing `## Migration`"), "{err}");
     }
 
     #[test]
     fn empty_summary_section() {
-        let raw = wrap("title: \"x\"", &body("", "N/A"));
+        let raw = wrap(r#"title: "x""#, "", "N/A");
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(
             err.to_string().contains("`## Summary` section is empty"),
@@ -370,7 +421,7 @@ mod tests {
 
     #[test]
     fn empty_migration_section() {
-        let raw = wrap("title: \"x\"", &body("y", ""));
+        let raw = wrap(r#"title: "x""#, "y", "");
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(
             err.to_string().contains("`## Migration` section is empty"),
@@ -380,24 +431,43 @@ mod tests {
 
     #[test]
     fn wrong_section_order() {
-        let raw = wrap(
-            "title: \"x\"",
-            "\n## Migration\n\ndo this\n\n## Summary\n\nhi\n",
-        );
-        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        let raw = indoc! {r#"
+            ---
+            title: "x"
+            ---
+
+            ## Migration
+
+            do this
+
+            ## Summary
+
+            hi
+
+            authors: pront
+        "#};
+        let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("must come before"), "{err}");
     }
 
     #[test]
     fn bad_anchor() {
-        let raw = wrap("title: \"x\"\nanchor: \"Not Valid!\"", &body("y", "N/A"));
+        let raw = wrap(
+            indoc! {r#"
+                title: "x"
+                anchor: "Not Valid!"
+            "#}
+            .trim(),
+            "y",
+            "N/A",
+        );
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("kebab-case slug"), "{err}");
     }
 
     #[test]
     fn todo_title_rejected() {
-        let raw = wrap("title: \"TODO one-line title\"", &body("y", "N/A"));
+        let raw = wrap(r#"title: "TODO one-line title""#, "y", "N/A");
         let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("placeholder 'TODO'"), "{err}");
     }
@@ -405,11 +475,22 @@ mod tests {
     #[test]
     fn headers_inside_code_fence_are_ignored() {
         // `## Summary` / `## Migration` only appear inside a fenced code block.
-        let raw = wrap(
-            "title: \"x\"",
-            "\n```\n## Summary\nfake\n\n## Migration\nfake\n```\n",
-        );
-        let err = validate_breaking_fragment(&raw, "x.breaking.md").unwrap_err();
+        let raw = indoc! {r#"
+            ---
+            title: "x"
+            ---
+
+            ```
+            ## Summary
+            fake
+
+            ## Migration
+            fake
+            ```
+
+            authors: pront
+        "#};
+        let err = validate_breaking_fragment(raw, "x.breaking.md").unwrap_err();
         assert!(err.to_string().contains("missing `## Summary`"), "{err}");
     }
 }
