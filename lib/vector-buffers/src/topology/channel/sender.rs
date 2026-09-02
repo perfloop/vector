@@ -291,7 +291,11 @@ impl<T: Bufferable> BufferSender<T> {
         self.overflow.as_ref().map(AsRef::as_ref)
     }
 
-    #[async_recursion]
+    /// Sends an item to the first buffer stage that accepts it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a buffer backend fails to write the item.
     pub async fn send(
         &mut self,
         mut item: T,
@@ -329,21 +333,25 @@ impl<T: Bufferable> BufferSender<T> {
                 // item perfectly well, so diverting it past memory would send an item the
                 // base could have kept to a stage that must drop it.
                 if self.base.requires_encodable_items() && !item.is_fully_encodable() {
-                    self.overflow
-                        .as_mut()
-                        .unwrap_or_else(|| unreachable!("overflow must exist"))
-                        .send(item, send_reference)
-                        .await?;
+                    Box::pin(
+                        self.overflow
+                            .as_mut()
+                            .unwrap_or_else(|| unreachable!("overflow must exist"))
+                            .send(item, send_reference),
+                    )
+                    .await?;
                     UsageAccounting::NotAccepted
                 } else {
                     match self.base.try_send(item).await? {
                         TryWriteOutcome::Written => UsageAccounting::Accepted,
                         TryWriteOutcome::Full(item) => {
-                            self.overflow
-                                .as_mut()
-                                .unwrap_or_else(|| unreachable!("overflow must exist"))
-                                .send(item, send_reference)
-                                .await?;
+                            Box::pin(
+                                self.overflow
+                                    .as_mut()
+                                    .unwrap_or_else(|| unreachable!("overflow must exist"))
+                                    .send(item, send_reference),
+                            )
+                            .await?;
                             UsageAccounting::NotAccepted
                         }
                         TryWriteOutcome::Dropped => UsageAccounting::NotAccepted,
