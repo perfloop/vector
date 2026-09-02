@@ -3,7 +3,6 @@
 
 use std::{sync::Arc, time::Instant};
 
-use async_recursion::async_recursion;
 use derivative::Derivative;
 use tokio::sync::Mutex;
 use tracing::Span;
@@ -379,11 +378,15 @@ impl<T: Bufferable> BufferSender<T> {
         Ok(())
     }
 
-    #[async_recursion]
+    /// Flushes this buffer stage and each overflow stage in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a buffer backend fails to flush.
     pub async fn flush(&mut self) -> crate::Result<()> {
         self.base.flush().await?;
         if let Some(overflow) = self.overflow.as_mut() {
-            overflow.flush().await?;
+            Box::pin(overflow.flush()).await?;
         }
 
         Ok(())
